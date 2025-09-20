@@ -1,0 +1,86 @@
+<!-- claudeChat.html -->
+<template>
+    <lightning-card title="Claude AI Assistant" icon-name="utility:chat">
+        <div slot="actions">
+            <lightning-button 
+                label="Clear Chat" 
+                onclick={clearChat}
+                variant="neutral">
+            </lightning-button>
+        </div>
+        
+        <div class="chat-container" style={containerStyle}>
+            <!-- Chat Messages -->
+            <div class="chat-messages slds-scrollable_y">
+                <template for:each={messages} for:item="message">
+                    <div key={message.id} class="message" data-is-user={message.isUser}>
+                        <div class="message-header">
+                            <template if:true={message.isUser}>
+                                <lightning-icon 
+                                    icon-name="standard:user" 
+                                    size="x-small">
+                                </lightning-icon>
+                            </template>
+                            <template if:false={message.isUser}>
+                                <lightning-icon 
+                                    icon-name="utility:robot" 
+                                    size="x-small">
+                                </lightning-icon>
+                            </template>
+                            <span class="message-sender">
+                                <template if:true={message.isUser}>You</template>
+                                <template if:false={message.isUser}>Claude</template>
+                            </span>
+                            <span class="message-timestamp">{message.timestamp}</span>
+                        </div>
+                        <div class="message-content" data-is-error={message.isError}>
+                            <lightning-formatted-text value={message.content}></lightning-formatted-text>
+                        </div>
+                    </div>
+                </template>
+                
+                <!-- Loading indicator -->
+                <template if:true={isLoading}>
+                    <div class="message" data-is-user="false">
+                        <div class="message-header">
+                            <lightning-icon icon-name="utility:robot" size="x-small"></lightning-icon>
+                            <span class="message-sender">Claude</span>
+                            <span class="message-timestamp">typing...</span>
+                        </div>
+                        <div class="message-content">
+                            <lightning-spinner 
+                                alternative-text="Claude is thinking..." 
+                                size="small">
+                            </lightning-spinner>
+                        </div>
+                    </div>
+                </template>
+            </div>
+            
+            <!-- Input Area -->
+            <div class="chat-input slds-p-around_small">
+                <div class="slds-form-element">
+                    <lightning-textarea 
+                        label="Message"
+                        variant="label-hidden"
+                        placeholder="Type your message here..."
+                        value={currentMessage}
+                        onchange={handleInputChange}
+                        onkeypress={handleKeyPress}
+                        disabled={isInputDisabled}
+                        rows="2">
+                    </lightning-textarea>
+                </div>
+                <div class="input-actions slds-var-m-top_x-small">
+                    <lightning-button 
+                        label={sendButtonLabel}
+                        onclick={sendMessage}
+                        variant="brand"
+                        disabled={isInputDisabled}
+                        class="send-button">
+                    </lightning-button>
+                </div>
+            </div>
+        </div>
+    </lightning-card>
+</template>
