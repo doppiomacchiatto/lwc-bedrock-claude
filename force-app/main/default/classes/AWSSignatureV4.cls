@@ -46,15 +46,19 @@ public class AWSSignatureV4 {
             'Credential=' + accessKey + '/' + credentialScope + ', ' +
             'SignedHeaders=' + signedHeaders + ', ' +
             'Signature=' + signature;
-        
+            
+        System.debug(LoggingLevel.DEBUG, 'authorization: '+authorization);
+        System.debug(LoggingLevel.DEBUG, 'dTime: '+dTime);
+        System.debug(LoggingLevel.DEBUG, 'dia:');
+
         SignatureResult result = new SignatureResult();
         result.authorization = authorization;
         result.dTime = dTime;
         result.dia = dia;
         
-        return result;
-    }
-    
+            return result;
+        }
+        
     private static String createCanonicalRequest(
         String httpMethod,
         String requestUri,
