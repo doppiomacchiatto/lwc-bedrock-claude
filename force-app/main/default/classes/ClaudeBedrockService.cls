@@ -19,44 +19,69 @@ public with sharing class ClaudeBedrockService {
             
             // Make the HTTP request to AWS Bedrock
             String response = callBedrockAPI(requestPayload);
-            System.debug(LoggingLevel.DEBUG, 'response: '+response);
             
             // Parse and return Claude's response
             return parseClaudeResponse(response);
             
         } catch (Exception e) {
-            System.debug(LoggingLevel.ERROR,'Error in sendMessage: ' + e.getMessage());
+            System.debug('Error in sendMessage: ' + e.getMessage());
             throw new AuraHandledException('Failed to send message to Claude: ' + e.getMessage());
         }
     }
     
-    private static Map<String, Object> buildClaudeRequestPayload(String message, List<ConversationMessage> conversationHistory) {
+private static Map<String, Object> buildClaudeRequestPayload(String message, List<ConversationMessage> conversationHistory) {
         List<Map<String, Object>> messages = new List<Map<String, Object>>();
-        
+        //For this application we will use the same role for all messages.
+        //This is not a best practice, but it is a simple way to get started.
+        String role = 'user';
+        /**
+         * TODO - Refactory null check.
+         */
         // Add conversation history
         if (conversationHistory != null) {
+            System.debug(LoggingLevel.DEBUG,'conversationHistory is not Null: '+conversationHistory);
             for (ConversationMessage historyMsg : conversationHistory) {
+
+                if(historyMsg.role != null || historyMsg.content != null){
+                    System.debug(LoggingLevel.DEBUG, 'historyMsg: '+historyMsg);
+                    System.debug(LoggingLevel.DEBUG, 'historyMsg.role: '+historyMsg.role);
+                }else{
+                    System.debug(LoggingLevel.DEBUG, 'historyMsg.role was Null');
+                    historyMsg.role = role;
+                    historyMsg.content = 'Initializing conversation...';
+                }
+
                 messages.add(new Map<String, Object>{
-                    'role' => historyMsg.role,
-                    'content' => historyMsg.content
+                    'role' => historyMsg.role.toLowerCase(),
+                    'content' => new List<Map<String, Object>>{
+                        new Map<String, Object>{
+                            'type' => 'text',
+                            'text' => historyMsg.content
+                        }
+                    }
                 });
             }
         }
         
         // Add current user message
         messages.add(new Map<String, Object>{
-            'role' => 'user',
-            'content' => message
+            'role' => role,
+            'content' => new List<Map<String, Object>>{
+                new Map<String, Object>{
+                    'type' => 'text',
+                    'text' => message
+                }
+            }
         });
         
-        // Build the complete request payload
+        // Build the complete request payload for Claude 3.x Messages API format
         Map<String, Object> payload = new Map<String, Object>{
             'anthropic_version' => 'bedrock-2023-05-31',
-            'max_tokens' => 4000,
-            'temperature' => 0.7,
-            'messages' => messages,
-            'system' => 'You are Claude, a helpful AI assistant created by Anthropic. You are integrated into a Salesforce Lightning Web Component to provide real-time chat capabilities. Be helpful, accurate, and conversational.'
+            'max_tokens' => 4096,
+            'messages' => messages
         };
+        
+        System.debug('Request Payload: ' + JSON.serializePretty(payload));
         
         return payload;
     }
@@ -66,34 +91,47 @@ public with sharing class ClaudeBedrockService {
         AWSCredentials credentials = getAWSCredentials();
         
         String requestBody = JSON.serialize(requestPayload);
+        
+        // Build endpoint URL - model ID will be URL encoded in the request URI
         String endpoint = BEDROCK_ENDPOINT + '/model/' + BEDROCK_MODEL_ID + '/invoke';
         
         // Create HTTP request
         HttpRequest req = new HttpRequest();
         req.setEndpoint(endpoint);
         req.setMethod('POST');
-        req.setHeader('Content-Type', 'application/json');
-        req.setHeader('Accept', 'application/json');
         req.setTimeout(120000); // 2 minutes timeout
         
-        // Add AWS authentication headers
-        addAWSAuthHeaders(req, requestBody, credentials);
-        //Refactored to use the AWSSignatureV4.cls (service)
+        System.debug('Full Endpoint (before encoding): ' + endpoint);
         
+        // Add AWS authentication headers (this will handle URL encoding)
+        addAWSAuthHeaders(req, requestBody, credentials);
+        
+        // Set body after headers are calculated
         req.setBody(requestBody);
-        System.debug(LoggingLevel.DEBUG, 'http eeq: '+req);
-        System.debug(LoggingLevel.DEBUG,'payload: '+requestBody);
-        System.debug(LoggingLevel.DEBUG, 'endpoint: '+endpoint);
-        System.debug(LoggingLevel.DEBUG, 'credentials: '+credentials);
         
         // Make the request
         Http http = new Http();
         HttpResponse res = http.send(req);
-        
-        if (res.getStatusCode() != 200) {
-            throw new CalloutException('AWS Bedrock API call failed: ' + res.getStatusCode() + ' - ' + res.getBody());
+        try{   
+            if (res.getStatusCode() != 200) {
+                String errorBody = res.getBody();
+                System.debug('AWS Bedrock Error - Status: ' + res.getStatusCode());
+                System.debug('AWS Bedrock Error - Body: ' + errorBody);
+                throw new CalloutException('AWS Bedrock API call failed: ' + res.getStatusCode() + ' - ' + errorBody);
+            }
+            else if (res.getStatusCode() == 403 ||  
+                    res.getStatusCode() == 401 ||  
+                    res.getStatusCode() == 400 ||  
+                    res.getStatusCode() == 404 ||  
+                    res.getStatusCode() == 405 ) {
+                String errorBody = res.getBody();
+                System.debug('AWS Bedrock Error - Status: ' + res.getStatusCode());
+                System.debug('AWS Bedrock Error - Body: ' + errorBody);
+                throw new CalloutException('AWS Bedrock API call failed: ' + res.getStatusCode() + ' - ' + errorBody); 
+            }
+        }catch (CalloutException e){
+            System.debug(LoggingLevel.ERROR,'Error in callBedrockAPI: ' + e.getMessage());
         }
-        
         return res.getBody();
     }
     
@@ -139,38 +177,116 @@ public with sharing class ClaudeBedrockService {
         }
     }
     
+        // Get the endpoint components
     private static void addAWSAuthHeaders(HttpRequest req, String requestBody, AWSCredentials credentials) {
-        // Implement AWS Signature Version 4 authentication
-        // This is a simplified version - you might want to use a more robust implementation
+        // Get the endpoint components
+        String endpoint = req.getEndpoint();
+        String requestUri = getRequestUriFromEndpoint(endpoint);
+        String host = getHostFromEndpoint(endpoint);
         
-        String dTime = Datetime.now().formatGmt('yyyyMMdd\'T\'HHmmss\'Z\'');
-        String dia = dTime.substring(0, 8);
-        String credentialScope = dia + '/' + credentials.region + '/bedrock/aws4_request';
-        String signedHeaders = 'content-type;host;x-amz-date';
-        String httpMethod = 'POST';
-        String endpoint = 'https://bedrock-runtime.us-east-1.amazonaws.com';
-        String requestUri = '/model/anthropic.claude-3-sonnet-20240229-v1:0/invoke';
-        String service = 'bedrock';
-        // For production, implement full AWS Signature V4
-        // This is a simplified version for demonstration
-        Map<String,String> headers = new Map<String,String>();
-        // Add required headers
-        headers.put('content-type', 'application/json');
-        headers.put('accept', 'application/json');
-        AWSSignatureV4.SignatureResult result = AWSSignatureV4.generateSignature(
-            httpMethod,
+        System.debug('=== AWS Request Details ===');
+        System.debug('Endpoint: ' + endpoint);
+        System.debug('Request URI: ' + requestUri);
+        System.debug('Host: ' + host);
+        System.debug('Method: ' + req.getMethod());
+        System.debug('Body Length: ' + requestBody.length());
+        
+        // Prepare headers for signing (use lowercase keys as required by AWS)
+        // AWS Bedrock requires specific accept header format
+        Map<String, String> headersForSigning = new Map<String, String>{
+            'accept' => '*/*',
+            'content-type' => 'application/json',
+            'host' => host
+        };
+        
+        // Generate AWS Signature V4
+        // Generate AWS Signature V4
+        AWSSignatureV4.SignatureResult signature = AWSSignatureV4.generateSignature(
+            req.getMethod(),
             endpoint,
             requestUri,
-            headers,
-            requestBody, 
-            getAWSCredentials().accessKeyId,
-            getAWSCredentials().secretAccessKey,
-            getAWSCredentials().region,
-            service);
-        req.setHeader('Authorization', result.authorization);
+            headersForSigning,
+            requestBody,
+            credentials.accessKeyId,
+            credentials.secretAccessKey,
+            credentials.region,
+            'bedrock'
+        );
+        
+        // IMPORTANT: Set headers on HttpRequest object
+        // Note: HttpRequest uses proper case, but signature calculation uses lowercase
+        req.setHeader('Accept', '*/*');
+        req.setHeader('Content-Type', 'application/json');
+        req.setHeader('Host', host);
+        req.setHeader('X-Amz-Date', signature.dTime);
+        req.setHeader('Authorization', signature.authorization);
+        
+        System.debug('=== Headers Set on Request ===');
+        System.debug('Accept: */*');
+        System.debug('Content-Type: application/json');
+        System.debug('Host: ' + host);
+        System.debug('X-Amz-Date: ' + signature.dTime);
+        System.debug('Authorization: ' + signature.authorization);
     }
     
-    // Wrapper classes
+    private static String getRequestUriFromEndpoint(String endpoint) {
+        String uri = '/';
+        
+        // Extract URI path from full endpoint
+        if (endpoint.contains('://')) {
+            String afterProtocol = endpoint.substringAfter('://');
+            if (afterProtocol.contains('/')) {
+                uri = '/' + afterProtocol.substringAfter('/');
+            }
+        }
+        
+        // URL encode the URI path (specifically for model IDs with colons)
+        uri = encodeURIPath(uri);
+        
+        System.debug('Request URI (encoded): ' + uri);
+        return uri;
+    }
+    
+    private static String encodeURIPath(String path) {
+        // Split path into segments to encode each part
+        List<String> segments = path.split('/', 0);
+        List<String> encodedSegments = new List<String>();
+        
+        for (String segment : segments) {
+            if (String.isNotBlank(segment)) {
+                // Encode special characters, particularly colon (:) to %3A
+                String encoded = EncodingUtil.urlEncode(segment, 'UTF-8');
+                // EncodingUtil.urlEncode uses + for spaces, but we need %20
+                // and it encodes / which we don't want encoded in the path
+                encoded = encoded.replace('+', '%20');
+                encodedSegments.add(encoded);
+            }
+        }
+        
+        // Reconstruct path with / separators
+        String encodedPath = '/' + String.join(encodedSegments, '/');
+        
+        return encodedPath;
+    }
+    
+    private static String getHostFromEndpoint(String endpoint) {
+        String host = endpoint;
+        
+        // Remove protocol
+        if (host.startsWith('https://')) {
+            host = host.substring(8);
+        } else if (host.startsWith('http://')) {
+            host = host.substring(7);
+        }
+        
+        // Remove path
+        if (host.contains('/')) {
+            host = host.substring(0, host.indexOf('/'));
+        }
+        
+        return host;
+    }
+    
     public class ConversationMessage {
         @AuraEnabled public String role;
         @AuraEnabled public String content;
