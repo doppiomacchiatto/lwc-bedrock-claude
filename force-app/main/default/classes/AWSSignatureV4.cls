@@ -7,7 +7,7 @@ public class AWSSignatureV4 {
     public class SignatureResult {
         public String authorization;
         public String dTime;
-        public String dia;
+        public String dA;
     }
     
     public static SignatureResult generateSignature(
@@ -21,44 +21,62 @@ public class AWSSignatureV4 {
         String region,
         String service
     ) {
-        // Step 1: Create canonical request
+        // Step 1: Create timestamp
         String dTime = Datetime.now().formatGmt('yyyyMMdd\'T\'HHmmss\'Z\'');
-        String dia = dTime.substring(0, 8);
-        headers.put('x-amz-date', dTime);
-        headers.put('host', getHostFromEndpoint(endpoint));
-        // Add required headers
-       // headers.setHeader('Host', req.getEndpoint().substringAfter('://').substringBefore('/'));
+        String dA = dTime.substring(0, 8);
         
+        // Step 2: Create a new headers map to avoid modifying the original
+        Map<String, String> allHeaders = new Map<String, String>();
+        
+        // Add all existing headers with lowercase keys
+        for (String key : headers.keySet()) {
+            allHeaders.put(key.toLowerCase(), headers.get(key));
+        }
+        
+        // Add required AWS headers (must be lowercase for canonical request)
+        allHeaders.put('x-amz-date', dTime);
+        
+        // Ensure host header is present
+        if (!allHeaders.containsKey('host')) {
+            allHeaders.put('host', getHostFromEndpoint(endpoint));
+        }
+        
+        // Step 3: Create canonical request
         String canonicalRequest = createCanonicalRequest(
-            httpMethod, requestUri, headers, payload
+            httpMethod, requestUri, allHeaders, payload
         );
         
-        // Step 2: Create string to sign
-        String credentialScope = dia + '/' + region + '/' + service + '/' + TERMINATION_STRING;
+        System.debug('Canonical Request:\n' + canonicalRequest);
+        
+        // Step 4: Create string to sign
+        String credentialScope = dA + '/' + region + '/' + service + '/' + TERMINATION_STRING;
         String stringToSign = createStringToSign(dTime, credentialScope, canonicalRequest);
         
-        // Step 3: Calculate signature
-        String signature = calculateSignature(secretKey, dia, region, service, stringToSign);
+        System.debug(LoggingLevel.DEBUG,'String to Sign:\n' + stringToSign);
         
-        // Step 4: Create authorization header
-        String signedHeaders = getSignedHeaders(headers);
+        // Step 5: Calculate signature
+        String signature = calculateSignature(secretKey, dA, region, service, stringToSign);
+        
+        System.debug(LoggingLevel.DEBUG,'Signature: ' + signature);
+        
+        // Step 6: Create authorization header
+        String signedHeaders = getSignedHeaders(allHeaders);
         String authorization = ALGORITHM + ' ' +
             'Credential=' + accessKey + '/' + credentialScope + ', ' +
             'SignedHeaders=' + signedHeaders + ', ' +
             'Signature=' + signature;
-            
-        System.debug(LoggingLevel.DEBUG, 'authorization: '+authorization);
-        System.debug(LoggingLevel.DEBUG, 'dTime: '+dTime);
-        System.debug(LoggingLevel.DEBUG, 'dia:');
 
+        System.debug(LoggingLevel.DEBUG,'Authorization: ' + authorization);
+        System.debug(LoggingLevel.DEBUG,'X-Amz-Date: ' + dTime);
+        
         SignatureResult result = new SignatureResult();
         result.authorization = authorization;
         result.dTime = dTime;
-        result.dia = dia;
+        result.dA = dA;
         
-            return result;
-        }
-        
+        return result;
+    }
+    
     private static String createCanonicalRequest(
         String httpMethod,
         String requestUri,
@@ -83,12 +101,14 @@ public class AWSSignatureV4 {
         // Payload Hash
         String payloadHash = hashSHA256(payload);
         
-        return httpMethod + '\n' +
-               canonicalUri + '\n' +
-               canonicalQueryString + '\n' +
-               canonicalHeaders + '\n' +
-               signedHeaders + '\n' +
-               payloadHash;
+        String canonical = httpMethod + '\n' +
+                          canonicalUri + '\n' +
+                          canonicalQueryString + '\n' +
+                          canonicalHeaders + '\n' +
+                          signedHeaders + '\n' +
+                          payloadHash;
+        
+        return canonical;
     }
     
     private static String createCanonicalHeaders(Map<String, String> headers) {
@@ -97,8 +117,11 @@ public class AWSSignatureV4 {
         
         String canonicalHeaders = '';
         for (String key : sortedKeys) {
-            canonicalHeaders += key.toLowerCase() + ':' + 
-                               headers.get(key).trim() + '\n';
+            String headerKey = key.toLowerCase().trim();
+            String headerValue = headers.get(key).trim();
+            // Replace multiple spaces with single space
+            headerValue = headerValue.replaceAll('\\s+', ' ');
+            canonicalHeaders += headerKey + ':' + headerValue + '\n';
         }
         
         return canonicalHeaders;
@@ -110,7 +133,7 @@ public class AWSSignatureV4 {
         
         List<String> lowerCaseKeys = new List<String>();
         for (String key : sortedKeys) {
-            lowerCaseKeys.add(key.toLowerCase());
+            lowerCaseKeys.add(key.toLowerCase().trim());
         }
         
         return String.join(lowerCaseKeys, ';');
@@ -129,13 +152,13 @@ public class AWSSignatureV4 {
     
     private static String calculateSignature(
         String secretKey,
-        String dia,
+        String dA,
         String region,
         String service,
         String stringToSign
     ) {
         Blob kSecret = Blob.valueOf('AWS4' + secretKey);
-        Blob kDate = signHMAC(kSecret, dia);
+        Blob kDate = signHMAC(kSecret, dA);
         Blob kRegion = signHMAC(kDate, region);
         Blob kService = signHMAC(kRegion, service);
         Blob kSigning = signHMAC(kService, TERMINATION_STRING);
@@ -166,6 +189,7 @@ public class AWSSignatureV4 {
             host = host.substring(0, host.indexOf('/'));
         }
         
+        System.debug('Host: ' + host);
         return host;
     }
 }
