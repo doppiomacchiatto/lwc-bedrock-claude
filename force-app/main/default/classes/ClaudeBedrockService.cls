@@ -29,7 +29,7 @@ public with sharing class ClaudeBedrockService {
         }
     }
     
-private static Map<String, Object> buildClaudeRequestPayload(String message, List<ConversationMessage> conversationHistory) {
+    private static Map<String, Object> buildClaudeRequestPayload(String message, List<ConversationMessage> conversationHistory) {
         List<Map<String, Object>> messages = new List<Map<String, Object>>();
         //For this application we will use the same role for all messages.
         //This is not a best practice, but it is a simple way to get started.
@@ -177,7 +177,7 @@ private static Map<String, Object> buildClaudeRequestPayload(String message, Lis
         }
     }
     
-        // Get the endpoint components
+    // Get the endpoint components
     private static void addAWSAuthHeaders(HttpRequest req, String requestBody, AWSCredentials credentials) {
         // Get the endpoint components
         String endpoint = req.getEndpoint();
